@@ -1,0 +1,133 @@
+# coding=utf-8
+import logging
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.dispatcher.filters.state import StatesGroup, State
+from aiogram.types import ContentType
+from aiogram.utils import executor
+
+API_TOKEN = '5001553397:AAGgAc_nZ32iPZY9bk7-U7Xq4gW9NvfQl5I'  # токен
+ADMIN_CHAT_ID = -1001827352727  # ID чата администраторов
+
+adverts = {}
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Initialize bot and dispatcher
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot, storage=MemoryStorage())
+dp.middleware.setup(LoggingMiddleware())
+
+start_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+start_keyboard.add('👉Старт')
+
+anonim_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+anonim_keyboard.add('👤Аноним')
+
+confirmation_keyboard = types.InlineKeyboardMarkup()
+confirmation_keyboard.add(types.InlineKeyboardButton('📩Отправить', callback_data='send'))
+confirmation_keyboard.add(types.InlineKeyboardButton('🚫Отменить', callback_data='cancel'))
+
+categories_keyboard = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+categories = ['💰Несанкционированная торговля', '🏗Несанкционированное строительство', '🚦Дороги, ямы и дорожные знаки',
+              '🔌Электричество/газ', '💡Освещение', '🗑Уборка мусора', '🐕Бродячие собаки']
+for item in categories:
+    categories_keyboard.add(item)
+
+
+class Form(StatesGroup):
+    category = State()
+    street = State()
+    problem = State()
+    photo = State()
+    author = State()
+
+
+@dp.message_handler(commands=['chat_id'], state='*')
+async def get_chat_id(message: types.Message):
+    await message.answer(str(message.chat.id))
+
+
+@dp.message_handler(commands=['start'], state='*')
+async def process_start_command(message: types.Message):
+    await message.answer('''Что может делать этот бот?
+
+Этот бот поможет вам отправить сообщения о проблемах села. С помощью бота, жители могут быстро уведомить мэрию о проблемах в селе. Чтобы сообщить о проблеме нажмите /start''', reply_markup=start_keyboard)
+
+
+@dp.message_handler(lambda message: message.text and 'старт' in message.text.lower(), state='*')
+async def category_q(message: types.Message):
+    await message.answer('Выберите категорию', reply_markup=categories_keyboard)
+    await Form.category.set()
+
+
+@dp.message_handler(state=Form.category)
+async def category_handler(message: types.Message):
+    await message.answer('Введите улицу', reply_markup=types.ReplyKeyboardRemove())
+    adverts[message.from_user.id] = {'category': message.text}
+    await Form.street.set()
+
+
+@dp.message_handler(state=Form.street)
+async def category_handler(message: types.Message):
+    adverts[message.from_user.id]['street'] = message.text
+    await message.answer('Опишите вкратце проблему', reply_markup=types.ReplyKeyboardRemove())
+    await Form.problem.set()
+
+
+@dp.message_handler(state=Form.problem)
+async def category_handler(message: types.Message):
+    adverts[message.from_user.id]['problem'] = message.text
+    await message.answer('Прикрепите изображение', reply_markup=types.ReplyKeyboardRemove())
+    await Form.photo.set()
+
+
+@dp.message_handler(content_types=[ContentType.PHOTO], state=Form.photo)
+async def photo_input(message: types.Message):
+    adverts[message.from_user.id]['photo'] = [message.photo[-1].file_id]
+    await message.answer('Введите Ваше имя и фамилию', reply_markup=anonim_keyboard)
+    await Form.author.set()
+
+
+@dp.message_handler(state=Form.author)
+async def author_name(message: types.Message):
+    adverts[message.from_user.id]['author'] = message.text
+    await message.answer('ㅤ', reply_markup=types.ReplyKeyboardRemove())
+    await message.answer_photo(adverts[message.from_user.id]["photo"][0],
+                               f'''Категория: {adverts[message.from_user.id]["category"]}
+Улица: {adverts[message.from_user.id]["street"]}
+Проблема: {adverts[message.from_user.id]["problem"]}
+Автор: {adverts[message.from_user.id]["author"]}''', reply_markup=confirmation_keyboard)
+    await Form.photo.set()
+
+
+@dp.callback_query_handler(state='*', text='send')
+async def send(call: types.CallbackQuery):
+    await call.answer('Сообщение отправлено. Напишите /start, чтобы создать новое сообщение', show_alert=True)
+    await call.message.edit_reply_markup()
+    await bot.send_photo(ADMIN_CHAT_ID, adverts[call.from_user.id]["photo"][0],
+                           f'''Категория: {adverts[call.from_user.id]["category"]}
+Улица: {adverts[call.from_user.id]["street"]}
+Проблема: {adverts[call.from_user.id]["problem"]}
+Автор: {adverts[call.from_user.id]["author"]}''')
+
+
+@dp.callback_query_handler(state='*', text='cancel')
+async def cancel(call: types.CallbackQuery):
+    await call.answer('Отменено. Напишите /start, чтобы создать новое сообщение', show_alert=True)
+    await call.message.edit_reply_markup()
+
+
+
+def main():
+    try:
+        executor.start_polling(dp, skip_updates=True)
+    except Exception:
+        main()
+
+
+if __name__ == '__main__':
+    main()
